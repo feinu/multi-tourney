@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import random
 import statistics
 from sqlalchemy import (
     create_engine,
@@ -61,6 +62,21 @@ class Player(Base):
         for name, count in results:
             counts[name] = count
         return counts
+
+    def min_meetings(self):
+        return min(self.meetings().values())
+
+    def players_at_min_meetings(self, verbose=False):
+        meetings = self.meetings()
+        min_meetings = min(self.meetings().values())
+        players = [
+            session.query(Player).filter(Player.name == k).first()
+            for k, v in meetings.items()
+            if v == min_meetings
+        ]
+        if False and verbose:
+            print(f"{self} needs to play {players}")
+        return players
 
     def weariness(self, opponents):
         """
@@ -156,6 +172,8 @@ class Match(Base):
         return f"M{self.id}(" + ",".join(p.name[:4] for p in self.participants) + ")"
 
     def add_participant(self, player):
+        if player.team in [p.team for p in self.participants]:
+            raise ValueError("Player/team already in match")
         self.participants.append(player)
         session.commit()
 
@@ -198,16 +216,18 @@ class Round(Base):
             [
                 (
                     match,
-                    player.projected_imbalance(match.participants) +
-                    player.projected_variance(match.participants) +
-                    player.raises_floor(match.participants) / 5
+                    (
+                        player.projected_imbalance(match.participants) +
+                        # player.projected_variance(match.participants) + 
+                        player.raises_ceiling(match.participants) / 2
+                    ) / max(1, len(match.participants))
                 )
                 for match in self.matches
                 if not match.has_team(player.team)
             ],
             key=lambda x: x[1],
         )
-        print(f"{player}: {match_preference}")
+        # print(f"{player}: {match_preference}")
         match_preference[0][0].add_participant(player)
 
 
@@ -228,22 +248,92 @@ class Tournament(Base):
             ]
         )
 
+    def make_round_random(self, players_per_race: int = 7, rested: list = []):
+        def stat():
+            # return statistics.pvariance([x[0] for x in imbalance_data()], mu=0)
+            return max(p[0] for p in imbalance_data())
+
+        print("--------- STARTING NEW ROUND ---------")
+        attempts = 0
+        start_stat = stat()
+        end_stat = start_stat * 100
+        while True:
+            attempts += 1
+            r = Round(tournament=self)
+            session.add(r)
+            matches = []
+            for i in range(4):
+                m = Match(round=r)
+                session.add(m)
+                matches.append(m)
+            teams = [t[0] for t in session.execute(select(Team)).all()]
+            random.shuffle(teams)
+            for team in teams:
+                players = [p for p in team.players]
+                random.shuffle(players)
+                for i in range(4):
+                    matches[i].add_participant(players[i])
+            end_stat = stat()
+            if end_stat < start_stat + 1 or attempts > 1000:
+                print(f"\nSettled on {end_stat}")
+                break
+            else:
+                # print(end_stat, end=",", flush=True)
+                for m in matches:
+                    session.delete(m)
+                session.delete(r)
+                session.commit()
+
     def make_round(self, players_per_race: int = 7, rested: list = []):
+        def key(p):
+            return p.min_meetings() + 0.1 / len(p.players_at_min_meetings()),
+
+        print("--------- STARTING NEW ROUND ---------")
+        print(statistics.pvariance([x[0] for x in imbalance_data()], mu=0))
         r = Round(tournament=self)
         session.add(r)
+
+        unmatched_players = sorted(r.unmatched_players(), key=key, reverse=True)
+        # Pre-populate matches with low-meetup pairings
         for n in range(4):
-            session.add(Match(round=r))
-        session.commit()
-        unmatched_players = sorted(
-            r.unmatched_players(),
-            key=lambda p: p.imbalance(),
-        )
+            m = Match(round=r)
+            session.add(m)
+            player = unmatched_players.pop()
+            opponents = player.players_at_min_meetings(verbose=True)
+            random.shuffle(opponents)
+            # found = False
+            opponents = [o for o in opponents if o in unmatched_players]
+            """
+            for opponent in opponents:
+                if opponent in unmatched_players:
+                    found = True
+                    break
+            """
+
+            if False:
+                print(
+                    f"Pre-populating {player}({key(player)})"
+                )
+            m.add_participant(player)
+            for o in opponents:
+                if o.raises_ceiling(m.participants) < 2:
+                    try:
+                        m.add_participant(o)
+                        unmatched_players.remove(o)
+                    except ValueError as e:
+                        print(e)
+            print(m.pretty())
+            # else:
+            # print("Running out of options, switching to normal allocation")
+            session.commit()
+            unmatched_players.sort(key=key, reverse=True)
+
         while unmatched_players:
             # Work on the player with the biggest imbalance first
             player = unmatched_players.pop()
             if player in rested:
                 continue
-            print(f"Allocating {player}, imbalance {player.imbalance()}")
+            # print(f"Allocating {player}, imbalance {player.imbalance()}")
             r.allocate_player_to_match(player)
             session.commit()
 
@@ -275,16 +365,20 @@ def preseed_races(t: Tournament, race_config: dict):
     session.commit()
 
 
-def imbalance_summary():
-    imbalances = sorted(
+def imbalance_data():
+    return sorted(
         [(p.imbalance(), p) for p in session.query(Player).all()],
         key=lambda x: x[0],
         reverse=True
     )
+
+
+def imbalance_summary(full=False):
+    imbalances = imbalance_data()
     minimum = min(i[0] for i in imbalances)
     maximum = max(i[0] for i in imbalances)
     for p in imbalances:
-        if p[0] in (minimum, maximum):
+        if full or p[0] in (minimum, maximum):
             print(p[0], p[1])
 
 
@@ -304,6 +398,7 @@ tourney = Tournament(name="Winter Champs")
 preseed_races(tourney, races_input)
 
 t = session.query(Tournament).first()
-for i in range(10):
-    t.make_round()
+for i in range(11):
+    t.make_round_random()
 imbalance_summary()
+print(statistics.pvariance([x[0] for x in imbalance_data()], mu=0))
