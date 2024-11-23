@@ -13,6 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import (
     declarative_base,
+    make_transient,
     sessionmaker,
     relationship,
     # aliased
@@ -248,22 +249,57 @@ class Tournament(Base):
             ]
         )
 
-    def make_round_random(self, players_per_race: int = 7, rested: list = []):
-        def stat():
-            # return statistics.pvariance([x[0] for x in imbalance_data()], mu=0)
-            return max(p[0] for p in imbalance_data())
+    def generate_rests(self):
+        """
+        Rotate through the teams, resting a random player from each team.
+        This means that "adjacent" teams will end up getting rested on
+        the same week, and opposite teams will rarely be rested at the same time.
+        Don't think this matters
+        """
+        teams = [
+            t[0] for t in session.execute(select(Team)).all()
+        ]
+        for team in teams:
+            team.rest_sequence = [1, 2, 3, 4]
+            random.shuffle(team.rest_sequence)
+        random.shuffle(teams)
 
-        print("--------- STARTING NEW ROUND ---------")
+        self.unrested = []
+        for i in range(4):
+            for team in teams:
+                self.unrested.append(
+                    session.scalar(
+                        select(Player)
+                        .where(Player.team == team)
+                        .where(Player.rank == team.rest_sequence[i])
+                    )
+                )
+
+    def make_round_random(self, iterations=1):
+        round_num = len(self.rounds)
+        track = rounds_input[round_num]["track"]
+        resting = rounds_input[round_num]["players"] < 7
+        print(f"--------- STARTING NEW ROUND, RESTING = {resting} ---------")
+        print(f"unrested: {len(self.unrested)}")
         attempts = 0
+        min_score = 9999
         start_stat = stat()
         end_stat = start_stat * 100
-        while True:
-            attempts += 1
-            r = Round(tournament=self)
+        rested = []
+        if resting:
+            rested = self.unrested[-4:]
+            self.unrested = self.unrested[:-4]
+        for attempts in range(iterations):
+            r = Round(
+                tournament=self,
+                number=round_num + 1,
+                track=track,
+            )
             session.add(r)
             matches = []
             for i in range(4):
                 m = Match(round=r)
+                m.has_rested = False
                 session.add(m)
                 matches.append(m)
             teams = [t[0] for t in session.execute(select(Team)).all()]
@@ -272,19 +308,47 @@ class Tournament(Base):
                 players = [p for p in team.players]
                 random.shuffle(players)
                 for i in range(4):
-                    matches[i].add_participant(players[i])
+                    # Assign to a match that has the fewest participants
+                    next_match = [
+                        m for m in matches
+                        if len(m.participants) == min(
+                            map(lambda x: len(x.participants), matches)
+                        )
+                    ][0]
+                    if players[i] not in rested:
+                        next_match.add_participant(players[i])
             end_stat = stat()
-            if end_stat < start_stat + 1 or attempts > 1000:
-                print(f"\nSettled on {end_stat}")
-                break
-            else:
-                # print(end_stat, end=",", flush=True)
-                for m in matches:
-                    session.delete(m)
-                session.delete(r)
-                session.commit()
+            if end_stat < min_score:  # or attempts > 1000:
+                min_score = end_stat
+                print(f"Improved to {end_stat}")
+                best_matches = [
+                    m.participants
+                    for m in matches
+                ]
+
+            for m in matches:
+                session.delete(m)
+            session.delete(r)
+            session.commit()
+
+        r = Round(
+            tournament=self,
+            number=round_num + 1,
+            track=track,
+        )
+        session.add(r)
+        for players in best_matches:
+            m = Match(round=r)
+            for p in players:
+                m.add_participant(p)
+            session.add(m)
+        session.commit()
 
     def make_round(self, players_per_race: int = 7, rested: list = []):
+        """
+        Attempt at an actual algorithm.
+        It doesn't work well at all.
+        """
         def key(p):
             return p.min_meetings() + 0.1 / len(p.players_at_min_meetings()),
 
@@ -323,8 +387,6 @@ class Tournament(Base):
                     except ValueError as e:
                         print(e)
             print(m.pretty())
-            # else:
-            # print("Running out of options, switching to normal allocation")
             session.commit()
             unmatched_players.sort(key=key, reverse=True)
 
@@ -333,7 +395,6 @@ class Tournament(Base):
             player = unmatched_players.pop()
             if player in rested:
                 continue
-            # print(f"Allocating {player}, imbalance {player.imbalance()}")
             r.allocate_player_to_match(player)
             session.commit()
 
@@ -350,7 +411,7 @@ def preseed_players(teams_config):
 
 def preseed_races(t: Tournament, race_config: dict):
     for roundname, races in race_config.items():
-        rnd = Round(tournament=t, number=1, track="foobar")
+        rnd = Round(tournament=t, number=1, track="Mexico")
         session.add(rnd)
         for race, participants in races.items():
             match = Match(round=rnd)
@@ -382,10 +443,23 @@ def imbalance_summary(full=False):
             print(p[0], p[1])
 
 
+def stat():
+    """
+    Most important is maximum imbalance for any player
+    Of secondary importance is keeping few players at high imbalances,
+    hence using variance with respect to zero
+    """
+    return (
+        max(p[0] for p in imbalance_data()) +
+        statistics.pvariance([x[0] for x in imbalance_data()], mu=0) / 100
+    )
+
+
 with open("teams.yml", "r") as f:
     config_input = yaml.safe_load(f)
     team_input = config_input["teams"]
     races_input = config_input["races"]
+    rounds_input = config_input["rounds"]
 
 engine = create_engine("sqlite:///:memory:")
 Base.metadata.create_all(engine)
@@ -398,7 +472,8 @@ tourney = Tournament(name="Winter Champs")
 preseed_races(tourney, races_input)
 
 t = session.query(Tournament).first()
+t.generate_rests()
 for i in range(11):
-    t.make_round_random()
+    t.make_round_random(iterations=5000)
 imbalance_summary()
 print(statistics.pvariance([x[0] for x in imbalance_data()], mu=0))
