@@ -13,10 +13,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import (
     declarative_base,
-    make_transient,
     sessionmaker,
     relationship,
-    # aliased
 )
 import yaml
 
@@ -455,11 +453,12 @@ def stat():
     )
 
 
-with open("teams.yml", "r") as f:
+with open("config.yml", "r") as f:
     config_input = yaml.safe_load(f)
     team_input = config_input["teams"]
     races_input = config_input["races"]
     rounds_input = config_input["rounds"]
+    iterations = config_input["iterations"]
 
 engine = create_engine("sqlite:///:memory:")
 Base.metadata.create_all(engine)
@@ -474,6 +473,6 @@ preseed_races(tourney, races_input)
 t = session.query(Tournament).first()
 t.generate_rests()
 for i in range(11):
-    t.make_round_random(iterations=5000)
+    t.make_round_random(iterations=iterations)
 imbalance_summary()
 print(statistics.pvariance([x[0] for x in imbalance_data()], mu=0))

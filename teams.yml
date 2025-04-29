@@ -1,0 +1,104 @@
+# 100 is good for testing, 5000 for final outputs
+iterations: 5000
+
+# team_name: {player_name: ranking_in_team}
+teams:
+  Red:
+    vas: 1
+    neo: 2
+    nia: 3
+    pat: 4
+  Green:
+    bob: 1
+    joj: 2
+    waz: 3
+    kat: 4
+  Blue:
+    iiv: 1
+    den: 2
+    tel: 3
+    pau: 4
+  Black:
+    how: 1
+    max: 2
+    bun: 3
+    gui: 4
+  Yellow:
+    raz: 1
+    fei: 2
+    and: 3
+    kys: 4
+  Orange:
+    sil: 1
+    ten: 2
+    alm: 3
+    car: 4
+  Silver:
+    arg: 1
+    che: 2
+    arr: 3
+    ran: 4
+
+# Set this to [] to start with no initial conditions
+# {round_name: {race_name: [players...]}}
+races:
+  Week 1:
+    Race 1:
+      - raz
+      - vas
+      - joj
+      - arr
+      - bun
+      - pau
+      - car
+    Race 2:
+      - arg
+      - iiv
+      - max
+      - ten
+      - nia
+      - kys
+      - kat
+    Race 3:
+      - how
+      - bob
+      - neo
+      - den
+      - and
+      - alm
+      - ran
+    Race 4:
+      - sil
+      - fei
+      - che
+      - tel
+      - waz
+      - pat
+      - gui
+
+# [{track: track_name, players: player_count}...]
+rounds:
+  - players: 7
+    track: Mexico
+  - players: 6
+    track: Great Britain
+  - players: 7
+    track: USA
+  - players: 6
+    track: Japan
+  - players: 6
+    track: France
+  - players: 7
+    track: Italy
+  - players: 6
+    track: USA
+  - players: 6
+    track: Mexico
+  - players: 7
+    track: Great Britain
+  - players: 6
+    track: Italy
+  - players: 6
+    track: France
+  - players: 7
+    track: Japan
